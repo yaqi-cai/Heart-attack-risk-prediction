@@ -1,0 +1,360 @@
+---
+title: "Predictive analysis for heart disease diagnosis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## READ DATA
+
+Firstly, we install any required package and read the related library. 
+
+```{r}
+#install.packages('readr')
+#install.packages('ggplot2')
+#install.packages('mlbench')
+#install.packages('corrplot')
+#install.packages('Amelia')
+#install.packages('caret')
+#install.packages('plotly')
+#install.packages('caTools')
+#install.packages('reshape2')
+#install.packages('dplyr')
+#install.packages("e1071")
+#install.packages("randomforest")
+#install.packages("car")
+#install.packages("gbm")
+library(MASS)
+library(readr)
+library(ggplot2)
+library(corrplot)
+library(mlbench)
+library(Amelia)
+library(plotly)
+library(reshape2)
+library(caret)
+library(caTools)
+library(dplyr)
+library(tree)
+library(randomForest)
+library(car)
+library(gbm)
+``` 
+
+Then, we read the data and rename a misspelled column.
+
+Attribute Information: 
+
+1. age 
+
+2. sex 
+
+3. chest pain type (4 values) 
+
+4. resting blood pressure 
+
+5. serum cholestoral in mg/dl 
+
+6. fasting blood sugar > 120 mg/dl
+
+7. resting electrocardiographic results (values 0,1,2)
+
+8. maximum heart rate achieved 
+
+9. exercise induced angina 
+
+10. oldpeak = ST depression induced by exercise relative to rest
+
+11. the slope of the peak exercise ST segment
+
+12. number of major vessels (0-3) colored by flourosopy 
+
+13. thal: 3 = normal; 6 = fixed defect; 7 = reversable defect
+
+```{r}
+heart <- read.csv('heart.csv', na.strings = "N/A")
+names(heart)[which(names(heart) == "ï..age")] <- "age"
+```
+
+
+Check for missing values:
+
+```{r}
+missmap(heart,col=c('yellow','black'),legend=TRUE)
+```
+
+There is not any missing value.
+
+## Distribution
+
+```{r}
+ggplot(data = heart) + 
+    geom_bar(mapping = aes(x=target))
+
+ggplot(heart, aes(x = thalach)) + 
+  scale_x_continuous(breaks = seq(50,200,5)) +
+  geom_histogram(aes(y = ..density..), binwidth = 5, color = 'white') + 
+  geom_density()
+
+ggplot(data = heart) + 
+    geom_bar(mapping = aes(x=cp)) 
+
+ggplot(data = heart) + 
+    geom_bar(mapping = aes(x=oldpeak)) 
+```
+
+The response "target" is not normally distributed as it only has two values (0-no presence and 1-presence)
+the number of people suffering heart attack is a bit larger than the number of healthy people.
+
+For the three selected predictors:
+"resting blood pressure"(trestbps) is approximately normal distributed;
+there are two group in "chest pain type"(cp) and "ST depression induced by exercise relative to rest"(oldpeak): absence (0) and presence (other numbers).For the group with sympthom, it is approximately normal distributed.
+
+## Correlations
+
+```{r}
+heart_num <- select_if(heart, is.numeric)
+corrplot(cor(heart_num))
+cor.test(~slope + oldpeak, data=heart)
+```
+
+From the graph, we can see all the predictors except "resting blood pressure" (trestbps), "serum cholestoral in mg/dl"(chol),  "fasting blood sugar > 120 mg/dl
+"(fbs),  "resting electrocardiographic results (values 0,1,2)"(restecg) are correlated to the response.
+
+Slope and oldpeak are strongly correlated to each other. From the graph and the correlation test. we can see:
+
+The estimated correlation from the sample is -0.578
+The 95% confidence limit for the population correlation is between -0.648 to -0.497.
+The probability of finding a correlation value this far from zero under the null hypothesis (both variables independent and distributed normally) is 2.2e-16 (a very small number!).
+Therefore we find evidence to reject the null hypothesis at the 5% significance level, and accept the hypothesis that the predictors slope and oldpeak are strongly correlated.
+
+Other predictors are not strongly correlated to each other.
+
+## Relationship
+
+```{r}
+ggplot(data = heart, aes( x = oldpeak, y = target)) + 
+  geom_point() +
+  geom_smooth(method = "lm")
+
+ggplot(data = heart, aes( x = cp, y = target)) + 
+  geom_point() +
+  geom_smooth(method = "lm")
+
+ggplot(data = heart, aes( x = thalach, y = target)) + 
+  geom_point() +
+  geom_smooth(method = "lm")
+
+
+```
+From the graphs, we can see that target decreases with increase in oldpeak and increases with decrease in cp and thalach.
+
+The only issue we observed is the strong correlation between slope and oldpeak which could cause issues due to collinearity. we will talk about this later.
+
+Except trestbps, chol, fbs, restecg, all the predictors may be good predictors as they are all correlated to the response significantly.
+
+## T-test
+
+```{r}
+t.test(target~ fbs, mu = 0, alt = "two.sided", conf = 0.95, data=heart)
+
+```
+We are interested in whethere there is a difference in target between male and female, so we run a t-test. From the result, we can see that at the 95% confidence level, the probability that there is no difference in target between male and female is 63.16%, impling that the correlation between target and gender is low.
+
+#Transfer the data
+```{r}
+heart$target2 <- factor(heart$target, levels = c("0","1"), labels = c("No", "Yes"))
+vif(lm(target ~ .-target2, data = heart))
+```
+Firstly, we convert the response target to factor column for the following LDA.
+Then, we use vif function to see if there is any collinearity issue. However, none of a VIF is larger than 5 or 10, so the predictor is more related the response than it is to the other predictors. 
+
+## LDA
+
+```{r}
+set.seed(123) 
+
+heartSplit <- sample(seq_len(nrow(heart)), 0.5 * nrow(heart))
+Train <- heart[heartSplit, ]
+Test <- heart[-heartSplit, ]
+
+lda.single= lda(target2 ~ thalach -target, data = Train)
+lda.single.prediction <- predict(lda.single, newdata= Test)$class
+table(predicted=lda.single.prediction,actual=Test$target2)
+
+lda.intermediate= lda(target2 ~ thalach + cp + oldpeak -target, data = Train)
+lda.intermediate.prediction <- predict(lda.intermediate, newdata= Test)$class
+table(predicted=lda.intermediate.prediction,actual=Test$target2)
+
+lda.full = lda(target2 ~ .-target, data = Train)
+lda.full.prediction <- predict(lda.full, newdata= Test)$class
+table(predicted=lda.full.prediction,actual=Test$target2)
+
+set.seed(123)
+cv_model1 <- train(
+  target2 ~ thalach -target, data = Train, 
+  method = "lda",
+  trControl = trainControl(method = "cv", number = 10)
+)
+
+set.seed(123)
+cv_model2 <- train(
+  target2 ~ thalach + cp + oldpeak -target, data = Train, 
+  method = "lda",
+  trControl = trainControl(method = "cv", number = 10)
+)
+
+set.seed(123)
+cv_model3 <- train(
+  target2 ~ .-target, data = Train, 
+  method = "lda",
+  trControl = trainControl(method = "cv", number = 10)
+)
+
+model_set = list(
+  model1 = cv_model1, 
+  model2 = cv_model2, 
+  model3 = cv_model3
+)
+results <- data.frame(summary(resamples(model_set))$statistics$Accuracy)
+results <- mutate(results, Misclassification_rate = (1-Mean)) #Calculating missclasification rate
+results <- mutate(results, Error_bars = (X3rd.Qu. - X1st.Qu.)) #Error bars
+
+
+results <- mutate(results, ymin = (Misclassification_rate - Error_bars ))
+results <- mutate(results, ymax = (Misclassification_rate + Error_bars ))
+
+ggplot(results, aes(x = 1:3, y=Misclassification_rate)) +
+    geom_point(size = 2) +
+    geom_errorbar(aes(ymin = ymin, ymax = ymax, y=))+ ggtitle("Missclassification Rate Against Model With Error Bars")#With error bars
+
+
+```
+
+From the graph, we can see that the full predictor model with error bars has the lowest misclassification rate.So it is the optimum model.
+
+We evaluate performance of chosen model on test dataset:
+
+```{r}
+lda.full = lda(target2 ~ .-target, data = Train)
+lda.full.prediction <- predict(lda.full, newdata= Test)$class
+table(predicted=lda.full.prediction,actual=Test$target2)
+
+misclassified = sum(lda.full.prediction!=Test$target2)
+misclassification_rate_lda = misclassified/nrow(Test)
+misclassification_rate_lda
+```
+
+There are 54+21=75 people without heart attack, and 74+3=77 people with heart attack, but the model predicts that there are 54 people without heart attack and 74 people with heart attack. The misclassification rate is 15.79%.
+
+An important thing to notice is that the misclassification rate of factor "no" is much higher than the misclassification rate of factor "yes".
+
+## Pruning decision tree
+```{r}
+set.seed(123)
+train <- sample(1:nrow(heart),nrow(heart)/2)
+heart.test <- heart[-train, ]
+
+tree.heart <- tree(target2 ~ .-target, data = heart, subset= train)
+
+set.seed(3)
+cv.heart <- cv.tree(tree.heart, FUN = prune.misclass)
+cv.heart
+
+
+N <- length(cv.heart$size)-2 
+size_vals <- cv.heart$size[1:N] 
+mc <- rep(0,N)
+
+for (i in 1:N){   
+   prune.heart <- prune.misclass(tree.heart, best = size_vals[i])   
+   tree.pred <- predict(prune.heart, heart.test, type = "class")   
+   mc[i] <- sum(tree.pred != heart.test$target) 
+ }
+
+plot(cv.heart$size, cv.heart$dev, 
+     type = "b", ylim= c(30,90))
+points(size_vals,mc, col='red') 
+
+plot(cv.heart$k, cv.heart$dev, type = "b")
+
+```
+
+Looking at the information stored we can access in the cv result, we found that the tree with 4 terminal nodes results in the lowest cross-validation error rate, with 33 cross-validation errors.
+
+```{r}
+prune.heart <- prune.misclass(tree.heart, best = 4)
+plot(prune.heart)
+text(prune.heart,cex=.8)     
+tree.pred <- predict(prune.heart, heart.test, type = "class")
+table(predicted=tree.pred, actual=heart.test$target2)
+```
+```{r}
+misclassified = sum(tree.pred!=heart.test$target2)
+misclassification_rate = misclassified/nrow(heart.test)
+misclassification_rate
+```
+
+We can see the misclassification rate of the best performing pruning decision tree is 19.08%.
+
+## Bagging decision tree
+
+```{r}
+set.seed(1)
+p <- 13
+heart_test <- heart[-train, "target"]
+bag.heart <- randomForest(target2 ~ .-target, data = heart, subset = train, mtry = 13, importance = TRUE)
+yhat.bag <- predict(bag.heart, newdata = heart[-train, ],type = "class")
+table(yhat.bag, heart_test)
+rf_tree = randomForest(target2~.-target, data = heart, mtry=p, ntree = 5000, do.trace=100)
+# rf_tree$mse stores the MSE calculated on the Out-Of-Bag  
+plot(rf_tree$err.rate[,1], xlab="N Trees", ylab="MCR")
+
+```
+
+From the result and plot of OOB performance, we can see that when ntree = 100, 4600, 4700, 4800 and 4900, OOB reaches its minimum. So we choose ntree=4600 to build the optimal decision tree as ntree=100 is small which will make the result of model unstable. 
+
+
+```{r}
+bag.heart <- randomForest(target2 ~ .-target, data = heart, subset = train, mtry = 13, importance = TRUE, ntree= 4600)
+yhat.bag <- predict(bag.heart, newdata = heart[-train, ])
+table(predicted=yhat.bag, actual=heart_test)
+```
+```{r}
+#the misclassification rate
+misclassified = sum(yhat.bag!=heart.test$target2)
+misclassification_rate = misclassified/nrow(heart.test)
+misclassification_rate
+```
+
+We can see the misclassification rate of the best performing bagging decision tree is 19.08%.
+
+## Summary
+
+```{r}
+#LDA Model
+
+table(predicted=lda.full.prediction,actual=Test$target2)
+misclassified = sum(lda.full.prediction!=Test$target2)
+misclassification_rate_lda = misclassified/nrow(Test)
+misclassification_rate_lda
+
+#Pruning decision tree
+
+table(predicted=tree.pred, actual=heart.test$target2)
+misclassified = sum(tree.pred!=heart.test$target2)
+misclassification_rate = misclassified/nrow(heart.test)
+misclassification_rate
+
+#Bagging decision tree
+
+table(predicted=yhat.bag, actual=heart_test)
+misclassified = sum(yhat.bag!=heart.test$target2)
+misclassification_rate = misclassified/nrow(heart.test)
+misclassification_rate
+```
+
+we generate the table of model performance across the three methods, and concludes that LDA model is the optimal model as it has the lowest misclassification rate. However, three models have a common disadvantage: the accauracy of outcome 'yes' is much lower than the accauracy of outcome 'no'. It means that the model may produce a false positive test result, which may be due to the insufficient database. The potential next step is therefore to add more predictors to lower the misclassification rate. 
